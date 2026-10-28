@@ -3,481 +3,794 @@ package com.example.claviermathematique
 
 import android.content.Context
 import android.content.res.Configuration
+import android.content.res.ColorStateList
 import android.graphics.Color
-import android.graphics.Typeface
-import android.graphics.drawable.GradientDrawable
 import android.inputmethodservice.InputMethodService
+import android.os.SystemClock
 import android.view.Gravity
+import android.view.MotionEvent
 import android.view.View
 import android.view.inputmethod.InputMethodManager
 import android.widget.Button
 import android.widget.HorizontalScrollView
 import android.widget.LinearLayout
 import android.widget.TextView
+import kotlin.math.abs
 
 class MathKeyboardService : InputMethodService() {
 
     private lateinit var root: LinearLayout
-    private lateinit var symbolArea: LinearLayout
-    private lateinit var categoryRow: LinearLayout
-    private lateinit var pageLabel: TextView
+    private lateinit var symbolArea: SwipeLayout
+    private lateinit var symbolPageIndicator: TextView
+    private lateinit var keyboardArea: LinearLayout
+    private lateinit var letterKeyboard: LinearLayout
+    private lateinit var permanentSpecialRow: HorizontalScrollView
+    private lateinit var specialKeyboard: SwipeLayout
+    private lateinit var specialPageIndicator: TextView
+    private lateinit var shiftButton: Button
+    private lateinit var modeButton: Button
 
     private var currentCategory = "Calcul"
-    private var currentPage = 0
-    private var uppercase = false
-    private var symbolsVisible = true
+    private var specialMode = false
+    private var capsLock = false
+    private var shiftPending = false
+    private var lastShiftTap = 0L
+    private var symbolPage = 0
+    private var specialPage = 0
 
-    private val darkTheme: Boolean
-        get() = (resources.configuration.uiMode
-            and Configuration.UI_MODE_NIGHT_MASK) ==
-            Configuration.UI_MODE_NIGHT_YES
+    private val darkMode: Boolean
+        get() = (resources.configuration.uiMode and
+            Configuration.UI_MODE_NIGHT_MASK) == Configuration.UI_MODE_NIGHT_YES
 
-    private val backgroundColor: Int
-        get() = if (darkTheme) Color.rgb(29, 30, 39)
-        else Color.rgb(235, 237, 242)
+    private val keyboardBackground: Int
+        get() = if (darkMode) Color.rgb(30, 30, 30) else Color.rgb(235, 237, 242)
 
-    private val keyColor: Int
-        get() = if (darkTheme) Color.rgb(53, 55, 67)
-        else Color.WHITE
+    private val keyBackground: Int
+        get() = if (darkMode) Color.rgb(65, 65, 65) else Color.rgb(250, 250, 252)
 
-    private val specialColor: Int
-        get() = if (darkTheme) Color.rgb(76, 78, 119)
-        else Color.rgb(207, 211, 235)
-
-    private val foregroundColor: Int
-        get() = if (darkTheme) Color.WHITE
-        else Color.rgb(35, 39, 50)
-
-    private val categories = linkedMapOf(
-        "Calcul" to listOf(
-            "+", "−", "×", "÷", "±", "∓", "=", "≠",
-            "√", "∛", "^", "%", "!", "(", ")", "/"
-        ),
-        "Comparaison" to listOf(
-            "<", ">", "≤", "≥", "≈", "≃", "≡", "∼",
-            "∝", "≪", "≫", "≅", "≇", "≮", "≯", "≊"
-        ),
-        "Grec" to listOf(
-            "α", "β", "γ", "δ", "ε", "ζ", "η", "θ",
-            "ι", "κ", "λ", "μ", "ν", "ξ", "ο", "π",
-            "ρ", "σ", "τ", "υ", "φ", "χ", "ψ", "ω",
-            "Γ", "Δ", "Θ", "Λ", "Ξ", "Π", "Σ", "Ω",
-            "e", "i", "ℯ", "ϕ", "ϵ", "ς"
-        ),
-        "Ensembles" to listOf(
-            "∈", "∉", "∋", "⊂", "⊆", "⊃", "⊇", "∪",
-            "∩", "∅", "∖", "⊄", "⊈", "ℕ", "ℤ", "ℚ",
-            "ℝ", "ℂ", "𝔽", "⊕", "⊗", "×", "∁", "∝"
-        ),
-        "Analyse" to listOf(
-            "lim", "→", "∞", "∑", "∏", "∫", "∬", "∮",
-            "∂", "∇", "′", "″", "Δ", "d/dx", "dx", "dy",
-            "∯", "∰", "∴", "∵", "↦", "⟶", "∄", "∃"
-        ),
-        "Logique" to listOf(
-            "∀", "∃", "∄", "¬", "∧", "∨", "⇒", "⇔",
-            "⟹", "⟺", "⊤", "⊥", "∴", "∵", "⊢", "⊨",
-            "⊻", "⊼", "⊽", "∎"
-        ),
-        "Algèbre linéaire" to listOf(
-            "→", "·", "×", "⊗", "⊕", "⟨", "⟩", "‖",
-            "det", "tr", "ker", "Im", "dim", "span",
-            "Aᵀ", "A⁻¹", "Iₙ", "λ", "v⃗", "u⃗", "0⃗", "ℝⁿ"
-        ),
-        "Autres" to listOf(
-            "P(A)", "P(A|B)", "E(X)", "Var", "Cov", "σ", "σ²",
-            "sin", "cos", "tan", "arcsin", "ln", "log",
-            "∠", "°", "⊥", "∥", "△", "²", "³", "⁴", "ⁿ",
-            "₀", "₁", "₂", "₃", "ₙ", "½", "⅓", "¼", "¾",
-            "[", "]", "{", "}", "|", "‖", "⌊", "⌋", "⌈", "⌉",
-            ":=", "↦", "≈", "∼", "≅", "∅"
-        )
-    )
+    private val keyTextColor: Int
+        get() = if (darkMode) Color.WHITE else Color.BLACK
 
     private val recentSymbols = mutableListOf<String>()
 
-    override fun onCreate() {
-        super.onCreate()
+    private val categories = linkedMapOf(
+        "Calcul" to listOf(
+            "+", "−", "×", "÷", "±", "∓", "=", "≠", "√", "∛",
+            "^", "%", "!", "(", ")", "/", "·", "⋅", "∞", "∣",
+            "∤", "∝", "∼", "≈", "≃", "≅", "≡", "≢", "∴", "∵",
+            "∎", "∶", "∷", "∜", "‰"
+        ),
+        "Comparaison" to listOf(
+            "<", ">", "≤", "≥", "≈", "≃", "≡", "∼", "∝", "≪",
+            "≫", "≅", "≇", "≮", "≯", "≊", "≲", "≳", "≶", "≷",
+            "≺", "≻", "≼", "≽", "≉", "≋", "≌", "≍", "≦", "≧"
+        ),
+        "Grec" to listOf(
+            "α", "β", "γ", "δ", "ε", "ζ", "η", "θ", "ι", "κ",
+            "λ", "μ", "ν", "ξ", "ο", "π", "ρ", "σ", "τ", "υ",
+            "φ", "χ", "ψ", "ω", "Γ", "Δ", "Θ", "Λ", "Ξ", "Π",
+            "Σ", "Ω", "ℯ", "ϕ", "ϵ", "ς"
+        ),
+        "Ensembles" to listOf(
+            "∈", "∉", "∋", "⊂", "⊆", "⊃", "⊇", "∪", "∩", "∅",
+            "∖", "⊄", "⊈", "ℕ", "ℤ", "ℚ", "ℝ", "ℂ", "𝔽", "⊕",
+            "⊗", "∁", "⊊", "⊋", "⊍", "⊎", "∃", "∀", "∉", "∋"
+        ),
+        "Analyse" to listOf(
+            "lim", "→", "∞", "∑", "∏", "∫", "∬", "∮", "∂", "∇",
+            "′", "″", "Δ", "d/dx", "dx", "dy", "∯", "∰", "∴", "∵",
+            "↦", "⟶", "∄", "∃", "∂x", "∂y", "∂²", "∮", "∫", "∬"
+        ),
+        "Logique" to listOf(
+            "∀", "∃", "∄", "¬", "∧", "∨", "⇒", "⇔", "⟹", "⟺",
+            "⊤", "⊥", "∴", "∵", "⊢", "⊨", "⊻", "⊼", "⊽", "∎",
+            "⊣", "⊩", "⊬", "⊭", "⊮", "⊯", "∦", "∥", "≃", "≡"
+        ),
+        "Algèbre linéaire" to listOf(
+            "→", "·", "×", "⊗", "⊕", "⟨", "⟩", "‖", "det", "tr",
+            "ker", "Im", "dim", "span", "Aᵀ", "A⁻¹", "Iₙ", "λ", "v⃗", "u⃗",
+            "0⃗", "ℝⁿ", "Id", "rank", "diag", "A²", "Aᵀ", "A⁻¹", "⟶", "↦"
+        ),
+        "Autres" to listOf(
+            "P(A)", "P(A|B)", "E(X)", "Var", "Cov", "σ", "σ²", "sin", "cos", "tan",
+            "arcsin", "ln", "log", "∠", "°", "⊥", "∥", "△", "²", "³",
+            "⁴", "ⁿ", "₀", "₁", "₂", "₃", "ₙ", "½", "⅓", "¼",
+            "¾", "[", "]", "{", "}", "|", "‖", "⌊", "⌋", "⌈",
+            "⌉", ":=", "↦", "≈", "∼", "≅", "∅", "∝", "∴", "∵"
+        )
+    )
 
-        val saved = getSharedPreferences(
-            "math_keyboard", Context.MODE_PRIVATE
-        ).getString("recent", "") ?: ""
+    // Caractères spéciaux toujours visibles en mode AZERTY.
+    private val permanentSpecials =
+        listOf("@", "#", "€", "$", "%", "&", "*", "-", "+", "=")
 
-        if (saved.isNotEmpty()) {
-            recentSymbols.addAll(saved.split("\u001F"))
-        }
-    }
+    // Deux pages de caractères spéciaux, avec 30 touches par page.
+    private val specialPages = listOf(
+        listOf(
+            "@", "#", "€", "$", "%", "&", "*", "-", "+", "=",
+            "(", ")", "[", "]", "{", "}", "/", "\\", "|", "_",
+            "!", "?", ":", ";", "'", "\"", ",", ".", "~", "`"
+        ),
+        listOf(
+            "£", "¥", "¢", "§", "©", "®", "™", "°", "…", "—",
+            "–", "·", "•", "¿", "¡", "«", "»", "‹", "›", "‰",
+            "^", "=", "<", ">", "+", "-", "*", "/", ":", ";"
+        )
+    )
 
     override fun onCreateInputView(): View {
+        loadRecentSymbols()
+
         root = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            setPadding(dp(3), dp(3), dp(3), dp(3))
-            setBackgroundColor(backgroundColor)
+            setPadding(dp(4), dp(3), dp(4), dp(14))
+            setBackgroundColor(keyboardBackground)
         }
 
-        // Onglets des catégories mathématiques
-        val categoryScroll = HorizontalScrollView(this).apply {
-            isHorizontalScrollBarEnabled = false
-            overScrollMode = View.OVER_SCROLL_NEVER
-        }
+        buildCategoryRow()
 
-        categoryRow = LinearLayout(this).apply {
-            orientation = LinearLayout.HORIZONTAL
-        }
-
-        categoryScroll.addView(categoryRow)
-
-        root.addView(
-            categoryScroll,
-            LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.MATCH_PARENT, dp(42)
-            )
-        )
-
-        // Zone de symboles : 7 colonnes x 3 lignes
-        symbolArea = LinearLayout(this).apply {
+        symbolArea = SwipeLayout(this) { direction ->
+            val count = symbolPageCount()
+            if (count > 1) {
+                symbolPage = (symbolPage + direction + count) % count
+                renderSymbols()
+            }
+        }.apply {
             orientation = LinearLayout.VERTICAL
         }
 
         root.addView(
             symbolArea,
             LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.MATCH_PARENT, dp(124)
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                dp(102)
             )
         )
 
-        // Indicateur de pagination
-        pageLabel = TextView(this).apply {
-            textSize = 11f
-            gravity = Gravity.CENTER
-            setTextColor(foregroundColor)
+        symbolPageIndicator = makeIndicator()
+
+        root.addView(
+            symbolPageIndicator,
+            LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                dp(15)
+            )
+        )
+
+        keyboardArea = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
         }
 
         root.addView(
-            pageLabel,
+            keyboardArea,
             LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.MATCH_PARENT, dp(18)
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT
             )
         )
 
-        renderCategories()
+        buildNumberRow()
+        buildLetterKeyboard()
+        buildPermanentSpecialRow()
+        buildSpecialKeyboard()
+        buildBottomControls()
+
         renderSymbols()
-
-        // Rangée dédiée aux chiffres
-        val numberRow = LinearLayout(this).apply {
-            orientation = LinearLayout.HORIZONTAL
-        }
-
-        "1234567890".forEach { digit ->
-            addKey(
-                numberRow, digit.toString(),
-                weight = 1f, height = 37
-            ) {
-                commit(digit.toString())
-            }
-        }
-
-        root.addView(
-            numberRow,
-            LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.MATCH_PARENT, dp(39)
-            )
-        )
-
-        // Première rangée AZERTY
-        addLetterRow("azertyuiop")
-
-        // Deuxième rangée AZERTY
-        addLetterRow("qsdfghjklm")
-
-        // Troisième rangée : majuscule, lettres, effacer
-        val thirdRow = LinearLayout(this).apply {
-            orientation = LinearLayout.HORIZONTAL
-        }
-
-        addKey(thirdRow, "⇧", 1.5f, 43, special = true) {
-            uppercase = !uppercase
-            refreshLetterRows()
-        }
-
-        "wxcvbn".forEach { letter ->
-            addKey(thirdRow, letter.toString(), 1f, 43) {
-                typeLetter(letter)
-            }
-        }
-
-        addKey(thirdRow, "'", 0.8f, 43) {
-            commit("'")
-        }
-
-        addKey(thirdRow, "⌫", 1.5f, 43, special = true) {
-            currentInputConnection?.deleteSurroundingText(1, 0)
-        }
-
-        root.addView(
-            thirdRow,
-            LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.MATCH_PARENT, dp(45)
-            )
-        )
-
-        // Rangée inférieure : modes, ponctuation, espace et commandes
-        val bottomRow = LinearLayout(this).apply {
-            orientation = LinearLayout.HORIZONTAL
-        }
-
-        addKey(bottomRow, "?123", 1.25f, 44, special = true) {
-            symbolsVisible = !symbolsVisible
-            symbolArea.visibility =
-                if (symbolsVisible) View.VISIBLE else View.GONE
-            pageLabel.visibility =
-                if (symbolsVisible) View.VISIBLE else View.GONE
-        }
-
-        addKey(bottomRow, ",", 0.7f, 44) {
-            commit(",")
-        }
-
-        addKey(bottomRow, "Espace", 3f, 44) {
-            commit(" ")
-        }
-
-        addKey(bottomRow, ".", 0.7f, 44) {
-            commit(".")
-        }
-
-        addKey(bottomRow, "↵", 1.1f, 44, special = true) {
-            currentInputConnection?.commitText("\n", 1)
-        }
-
-        addKey(bottomRow, "🌐", 1.1f, 44, special = true) {
-            val manager = getSystemService(
-                Context.INPUT_METHOD_SERVICE
-            ) as InputMethodManager
-            manager.showInputMethodPicker()
-        }
-
-        root.addView(
-            bottomRow,
-            LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.MATCH_PARENT, dp(46)
-            )
-        )
+        updateShiftButton()
+        updateKeyboardVisibility()
 
         return root
     }
 
-    private fun renderCategories() {
-        categoryRow.removeAllViews()
+    private fun buildCategoryRow() {
+        val scroll = HorizontalScrollView(this).apply {
+            isHorizontalScrollBarEnabled = false
+        }
 
-        (listOf("Récents") + categories.keys).forEach { category ->
-            addKey(
-                categoryRow,
-                category,
-                weight = 0f,
-                height = 38,
-                special = category == currentCategory ||
-                    (category == "Récents" && currentCategory == "Récents"),
-                horizontalPadding = 7
-            ) {
+        val row = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+        }
+
+        (listOf("Récents") + categories.keys.toList()).forEach { category ->
+            val button = makeKey(category, 11f) {
                 currentCategory = category
-                currentPage = 0
-                symbolsVisible = true
-                symbolArea.visibility = View.VISIBLE
-                pageLabel.visibility = View.VISIBLE
-                renderCategories()
+                symbolPage = 0
                 renderSymbols()
             }
-        }
-    }
 
-    private fun renderSymbols() {
-        symbolArea.removeAllViews()
-
-        val symbols = if (currentCategory == "Récents") {
-            recentSymbols.toList()
-        } else {
-            categories[currentCategory] ?: emptyList()
-        }
-
-        val pages = symbols.chunked(21)
-        val pageCount = pages.size
-        if (currentPage >= pageCount) currentPage = 0
-
-        val pageSymbols = pages.getOrNull(currentPage) ?: emptyList()
-
-        pageSymbols.chunked(7).forEach { rowSymbols ->
-            val row = LinearLayout(this).apply {
-                orientation = LinearLayout.HORIZONTAL
-            }
-
-            rowSymbols.forEach { symbol ->
-                addKey(row, symbol, 1f, 35) {
-                    commit(symbol)
-                    rememberSymbol(symbol)
-                }
-            }
-
-            repeat(7 - rowSymbols.size) {
-                row.addView(
-                    View(this),
-                    LinearLayout.LayoutParams(0, dp(35), 1f)
-                )
-            }
-
-            symbolArea.addView(
-                row,
+            row.addView(
+                button,
                 LinearLayout.LayoutParams(
-                    LinearLayout.LayoutParams.MATCH_PARENT, dp(38)
-                )
+                    LinearLayout.LayoutParams.WRAP_CONTENT,
+                    dp(38)
+                ).apply {
+                    setMargins(dp(1), dp(1), dp(1), dp(1))
+                }
             )
         }
 
-        // Navigation entre les pages de symboles
-        val navigation = LinearLayout(this).apply {
-            orientation = LinearLayout.HORIZONTAL
-            gravity = Gravity.CENTER
-        }
-
-        addKey(navigation, "‹", 1f, 24, special = true) {
-            if (pageCount > 0) {
-                currentPage = (currentPage - 1 + pageCount) % pageCount
-                renderSymbols()
-            }
-        }
-
-        pageLabel.text = if (pageCount == 0) {
-            "Aucun symbole récent"
-        } else {
-            "Page ${currentPage + 1} / $pageCount"
-        }
-
-        addKey(navigation, "›", 1f, 24, special = true) {
-            if (pageCount > 0) {
-                currentPage = (currentPage + 1) % pageCount
-                renderSymbols()
-            }
-        }
-
-        // Les boutons de navigation restent dans la zone des symboles.
-        symbolArea.addView(navigation)
-    }
-
-    private fun addLetterRow(letters: String) {
-        val row = LinearLayout(this).apply {
-            orientation = LinearLayout.HORIZONTAL
-            tag = "letters:$letters"
-        }
-
-        letters.forEach { letter ->
-            addKey(row, letter.toString(), 1f, 43) {
-                typeLetter(letter)
-            }
-        }
+        scroll.addView(row)
 
         root.addView(
-            row,
+            scroll,
             LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.MATCH_PARENT, dp(45)
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                dp(41)
             )
         )
     }
 
-    private fun refreshLetterRows() {
-        // Met à jour les libellés des deux premières rangées AZERTY.
-        for (index in 0 until root.childCount) {
-            val row = root.getChildAt(index) as? LinearLayout ?: continue
-            val letters = row.tag as? String ?: continue
-            val text = letters.removePrefix("letters:")
+    private fun symbolsForCurrentCategory(): List<String> =
+        if (currentCategory == "Récents") {
+            recentSymbols.toList()
+        } else {
+            categories[currentCategory].orEmpty()
+        }
 
-            for (i in 0 until minOf(row.childCount, text.length)) {
-                val button = row.getChildAt(i) as? Button ?: continue
-                button.text = if (uppercase) {
-                    text[i].uppercaseChar().toString()
-                } else {
-                    text[i].toString()
+    private fun symbolPageCount(): Int =
+        maxOf(1, (symbolsForCurrentCategory().size + 29) / 30)
+
+    private fun renderSymbols() {
+        if (!::symbolArea.isInitialized) return
+
+        symbolArea.removeAllViews()
+
+        val symbols = symbolsForCurrentCategory()
+        val pageCount = symbolPageCount()
+
+        symbolPage = symbolPage.coerceIn(0, pageCount - 1)
+
+        val visibleSymbols = symbols.drop(symbolPage * 30).take(30)
+
+        visibleSymbols.chunked(10).forEach { chunk ->
+            val row = LinearLayout(this).apply {
+                orientation = LinearLayout.HORIZONTAL
+            }
+
+            chunk.forEach { symbol ->
+                val button = makeKey(
+                    symbol,
+                    if (symbol.length > 4) 11f else 16f
+                ) {
+                    insertSymbol(symbol)
                 }
+
+                row.addView(
+                    button,
+                    LinearLayout.LayoutParams(0, dp(31), 1f).apply {
+                        setMargins(dp(1), dp(1), dp(1), dp(1))
+                    }
+                )
+            }
+
+            repeat(10 - chunk.size) {
+                row.addView(
+                    View(this),
+                    LinearLayout.LayoutParams(0, dp(31), 1f)
+                )
+            }
+
+            symbolArea.addView(row)
+        }
+
+        symbolPageIndicator.text = if (pageCount > 1) {
+            "Glisser ← / →  •  ${symbolPage + 1}/$pageCount"
+        } else {
+            if (currentCategory == "Récents") {
+                "Symboles récents"
+            } else {
+                "Symboles mathématiques"
             }
         }
     }
 
-    private fun typeLetter(letter: Char) {
-        val value = if (uppercase) {
-            letter.uppercaseChar().toString()
-        } else {
-            letter.toString()
+    private fun buildNumberRow() {
+        val row = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
         }
 
-        commit(value)
-        uppercase = false
-        refreshLetterRows()
+        "1234567890".forEach { digit ->
+            val button = makeKey(digit.toString(), 16f) {
+                commit(digit.toString())
+            }
+
+            row.addView(
+                button,
+                LinearLayout.LayoutParams(0, dp(34), 1f).apply {
+                    setMargins(dp(1), dp(1), dp(1), dp(1))
+                }
+            )
+        }
+
+        keyboardArea.addView(row)
+    }
+
+    private fun buildLetterKeyboard() {
+        letterKeyboard = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+        }
+
+        addLetterRow(letterKeyboard, "azertyuiop")
+        addLetterRow(letterKeyboard, "qsdfghjklm")
+
+        val thirdRow = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+        }
+
+        shiftButton = makeKey("⇧", 20f) {
+            handleShiftTap()
+        }
+
+        thirdRow.addView(
+            shiftButton,
+            LinearLayout.LayoutParams(0, dp(39), 1.15f).apply {
+                setMargins(dp(1), dp(1), dp(1), dp(1))
+            }
+        )
+
+        // Maj fonctionne aussi pour w, x, c, v, b et n.
+        "wxcvbn,;:'".forEach { character ->
+            val button = makeKey(character.toString(), 16f) {
+                if (character.isLetter()) {
+                    val output = if (capsLock || shiftPending) {
+                        character.uppercaseChar().toString()
+                    } else {
+                        character.toString()
+                    }
+
+                    commit(output)
+
+                    if (!capsLock) {
+                        shiftPending = false
+                    }
+
+                    updateShiftButton()
+                    refreshLetterLabels()
+                } else {
+                    commit(character.toString())
+                }
+            }
+
+            thirdRow.addView(
+                button,
+                LinearLayout.LayoutParams(0, dp(39), 0.78f).apply {
+                    setMargins(dp(1), dp(1), dp(1), dp(1))
+                }
+            )
+        }
+
+        val deleteButton = makeKey("⌫", 19f) {
+            currentInputConnection?.deleteSurroundingText(1, 0)
+        }
+
+        thirdRow.addView(
+            deleteButton,
+            LinearLayout.LayoutParams(0, dp(39), 1.15f).apply {
+                setMargins(dp(1), dp(1), dp(1), dp(1))
+            }
+        )
+
+        letterKeyboard.addView(thirdRow)
+        keyboardArea.addView(letterKeyboard)
+    }
+
+    private fun addLetterRow(parent: LinearLayout, characters: String) {
+        val row = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+        }
+
+        characters.forEach { character ->
+            val label = if (capsLock || shiftPending) {
+                character.uppercaseChar().toString()
+            } else {
+                character.toString()
+            }
+
+            val button = makeKey(label, 16f) {
+                val output = if (capsLock || shiftPending) {
+                    character.uppercaseChar().toString()
+                } else {
+                    character.toString()
+                }
+
+                commit(output)
+
+                if (!capsLock) {
+                    shiftPending = false
+                }
+
+                updateShiftButton()
+                refreshLetterLabels()
+            }
+
+            row.addView(
+                button,
+                LinearLayout.LayoutParams(0, dp(39), 1f).apply {
+                    setMargins(dp(1), dp(1), dp(1), dp(1))
+                }
+            )
+        }
+
+        parent.addView(row)
+    }
+
+    private fun buildPermanentSpecialRow() {
+        permanentSpecialRow = HorizontalScrollView(this).apply {
+            isHorizontalScrollBarEnabled = false
+        }
+
+        val row = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+        }
+
+        permanentSpecials.forEach { symbol ->
+            val button = makeKey(symbol, 16f) {
+                commit(symbol)
+            }
+
+            row.addView(
+                button,
+                LinearLayout.LayoutParams(dp(42), dp(33)).apply {
+                    setMargins(dp(1), dp(1), dp(1), dp(1))
+                }
+            )
+        }
+
+        permanentSpecialRow.addView(row)
+
+        keyboardArea.addView(
+            permanentSpecialRow,
+            LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                dp(35)
+            )
+        )
+    }
+
+    private fun buildSpecialKeyboard() {
+        specialKeyboard = SwipeLayout(this) { direction ->
+            specialPage =
+                (specialPage + direction + specialPages.size) % specialPages.size
+
+            renderSpecialPage()
+        }.apply {
+            orientation = LinearLayout.VERTICAL
+        }
+
+        specialPageIndicator = makeIndicator()
+
+        keyboardArea.addView(specialKeyboard)
+
+        keyboardArea.addView(
+            specialPageIndicator,
+            LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                dp(15)
+            )
+        )
+
+        renderSpecialPage()
+    }
+
+    private fun renderSpecialPage() {
+        if (!::specialKeyboard.isInitialized) return
+
+        specialKeyboard.removeAllViews()
+
+        specialPages[specialPage].chunked(10).forEach { chunk ->
+            val row = LinearLayout(this).apply {
+                orientation = LinearLayout.HORIZONTAL
+            }
+
+            chunk.forEach { symbol ->
+                val button = makeKey(symbol, 16f) {
+                    commit(symbol)
+                }
+
+                row.addView(
+                    button,
+                    LinearLayout.LayoutParams(0, dp(39), 1f).apply {
+                        setMargins(dp(1), dp(1), dp(1), dp(1))
+                    }
+                )
+            }
+
+            repeat(10 - chunk.size) {
+                row.addView(
+                    View(this),
+                    LinearLayout.LayoutParams(0, dp(39), 1f)
+                )
+            }
+
+            specialKeyboard.addView(row)
+        }
+
+        specialPageIndicator.text =
+            "Glisser ← / →  •  ${specialPage + 1}/${specialPages.size}"
+    }
+
+    private fun buildBottomControls() {
+        val row = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER
+        }
+
+        modeButton = addBottomButton(row, "?123", 1.1f) {
+            specialMode = !specialMode
+            updateKeyboardVisibility()
+        }
+
+        addBottomButton(row, ",", 0.65f) {
+            commit(",")
+        }
+
+        addBottomButton(row, "Espace", 2.2f) {
+            commit(" ")
+        }
+
+        addBottomButton(row, ".", 0.65f) {
+            commit(".")
+        }
+
+        addBottomButton(row, "↵", 0.9f) {
+            commit("\n")
+        }
+
+        addBottomButton(row, "🌐", 0.9f) {
+            val manager =
+                getSystemService(Context.INPUT_METHOD_SERVICE) as InputMethodManager
+
+            manager.showInputMethodPicker()
+        }
+
+        keyboardArea.addView(
+            row,
+            LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                dp(42)
+            )
+        )
+    }
+
+    private fun addBottomButton(
+        parent: LinearLayout,
+        label: String,
+        weight: Float,
+        action: () -> Unit
+    ): Button {
+        val button = makeKey(label, 13f, action)
+
+        parent.addView(
+            button,
+            LinearLayout.LayoutParams(0, dp(39), weight).apply {
+                setMargins(dp(1), dp(1), dp(1), dp(1))
+            }
+        )
+
+        return button
+    }
+
+    private fun makeIndicator(): TextView =
+        TextView(this).apply {
+            textSize = 10f
+            gravity = Gravity.CENTER
+            setTextColor(keyTextColor)
+        }
+
+    private fun makeKey(
+        label: String,
+        size: Float,
+        action: () -> Unit
+    ): Button =
+        Button(this).apply {
+            text = label
+            textSize = size
+            isAllCaps = false
+            minWidth = 0
+            minimumWidth = 0
+            minHeight = 0
+            minimumHeight = 0
+            setPadding(dp(1), 0, dp(1), 0)
+            setTextColor(keyTextColor)
+            backgroundTintList = ColorStateList.valueOf(keyBackground)
+            setOnClickListener { action() }
+        }
+
+    private fun handleShiftTap() {
+        val now = SystemClock.uptimeMillis()
+
+        if (now - lastShiftTap in 1..350) {
+            capsLock = !capsLock
+            shiftPending = false
+        } else {
+            shiftPending = true
+        }
+
+        lastShiftTap = now
+        updateShiftButton()
+        refreshLetterLabels()
+    }
+
+    private fun updateShiftButton() {
+        if (!::shiftButton.isInitialized) return
+
+        val active = capsLock || shiftPending
+
+        shiftButton.text = if (capsLock) "⇧▴" else "⇧"
+
+        shiftButton.backgroundTintList = ColorStateList.valueOf(
+            if (active) Color.WHITE else keyBackground
+        )
+
+        shiftButton.setTextColor(
+            if (active) Color.BLACK else keyTextColor
+        )
+    }
+
+    private fun refreshLetterLabels() {
+        if (!::letterKeyboard.isInitialized) return
+
+        val rows = listOf("azertyuiop", "qsdfghjklm")
+
+        rows.forEachIndexed { rowIndex, characters ->
+            val row = letterKeyboard.getChildAt(rowIndex) as? LinearLayout
+                ?: return@forEachIndexed
+
+            characters.forEachIndexed innerLoop@{ index, character ->
+                val button = row.getChildAt(index) as? Button
+                    ?: return@innerLoop
+
+                button.text = if (capsLock || shiftPending) {
+                    character.uppercaseChar().toString()
+                } else {
+                    character.toString()
+                }
+            }
+        }
+
+        val thirdRow = letterKeyboard.getChildAt(2) as? LinearLayout
+            ?: return
+
+        "wxcvbn".forEachIndexed { index, character ->
+            val button = thirdRow.getChildAt(index + 1) as? Button
+                ?: return@forEachIndexed
+
+            button.text = if (capsLock || shiftPending) {
+                character.uppercaseChar().toString()
+            } else {
+                character.toString()
+            }
+        }
+    }
+
+    private fun updateKeyboardVisibility() {
+        if (!::letterKeyboard.isInitialized ||
+            !::specialKeyboard.isInitialized
+        ) {
+            return
+        }
+
+        letterKeyboard.visibility =
+            if (specialMode) View.GONE else View.VISIBLE
+
+        specialKeyboard.visibility =
+            if (specialMode) View.VISIBLE else View.GONE
+
+        specialPageIndicator.visibility =
+            if (specialMode) View.VISIBLE else View.GONE
+
+        modeButton.text = if (specialMode) "ABC" else "?123"
+
+        // La rangée de caractères courants reste visible dans les deux modes.
+        permanentSpecialRow.visibility = View.VISIBLE
+    }
+
+    private fun insertSymbol(symbol: String) {
+        commit(symbol)
+
+        recentSymbols.remove(symbol)
+        recentSymbols.add(0, symbol)
+
+        while (recentSymbols.size > 30) {
+            recentSymbols.removeAt(recentSymbols.lastIndex)
+        }
+
+        getSharedPreferences("math_keyboard", Context.MODE_PRIVATE)
+            .edit()
+            .putString("recent_symbols", recentSymbols.joinToString("\u001F"))
+            .apply()
+
+        if (currentCategory == "Récents") {
+            symbolPage = 0
+            renderSymbols()
+        }
+    }
+
+    private fun loadRecentSymbols() {
+        recentSymbols.clear()
+
+        val stored = getSharedPreferences(
+            "math_keyboard",
+            Context.MODE_PRIVATE
+        ).getString("recent_symbols", "").orEmpty()
+
+        if (stored.isNotBlank()) {
+            recentSymbols.addAll(
+                stored.split("\u001F").filter { it.isNotBlank() }
+            )
+        }
     }
 
     private fun commit(value: String) {
         currentInputConnection?.commitText(value, 1)
     }
 
-    private fun rememberSymbol(symbol: String) {
-        recentSymbols.remove(symbol)
-        recentSymbols.add(0, symbol)
+    /**
+     * Gère les glissements horizontaux.
+     * direction = -1 pour la page précédente, +1 pour la suivante.
+     */
+    private inner class SwipeLayout(
+        context: Context,
+        private val onSwipe: (Int) -> Unit
+    ) : LinearLayout(context) {
 
-        while (recentSymbols.size > 21) {
-            recentSymbols.removeAt(recentSymbols.lastIndex)
-        }
+        private var startX = 0f
+        private var startY = 0f
+        private var swipeHandled = false
 
-        getSharedPreferences(
-            "math_keyboard", Context.MODE_PRIVATE
-        ).edit().putString(
-            "recent", recentSymbols.joinToString("\u001F")
-        ).apply()
-    }
+        override fun onInterceptTouchEvent(event: MotionEvent): Boolean {
+            when (event.actionMasked) {
+                MotionEvent.ACTION_DOWN -> {
+                    startX = event.x
+                    startY = event.y
+                    swipeHandled = false
+                }
 
-    private fun addKey(
-        parent: LinearLayout,
-        label: String,
-        weight: Float,
-        height: Int,
-        special: Boolean = false,
-        horizontalPadding: Int = 1,
-        action: () -> Unit
-    ) {
-        val button = Button(this).apply {
-            text = label
-            isAllCaps = false
-            textSize = when {
-                label.length > 8 -> 10f
-                label.length > 4 -> 12f
-                label.length > 2 -> 14f
-                else -> 19f
-            }
-            typeface = Typeface.DEFAULT
-            setTextColor(foregroundColor)
-            minHeight = 0
-            minWidth = 0
-            stateListAnimator = null
-            setPadding(dp(horizontalPadding), 0, dp(horizontalPadding), 0)
+                MotionEvent.ACTION_MOVE -> {
+                    val dx = event.x - startX
+                    val dy = event.y - startY
 
-            background = GradientDrawable().apply {
-                setColor(if (special) specialColor else keyColor)
-                cornerRadius = dp(5).toFloat()
+                    if (abs(dx) > dp(35) && abs(dx) > abs(dy)) {
+                        swipeHandled = true
+                        return true
+                    }
+                }
             }
 
-            setOnClickListener { action() }
+            return super.onInterceptTouchEvent(event)
         }
 
-        val params = LinearLayout.LayoutParams(
-            if (weight == 0f) {
-                LinearLayout.LayoutParams.WRAP_CONTENT
-            } else {
-                0
-            },
-            dp(height),
-            weight
-        ).apply {
-            setMargins(dp(1), dp(1), dp(1), dp(1))
+        override fun onTouchEvent(event: MotionEvent): Boolean {
+            when (event.actionMasked) {
+                MotionEvent.ACTION_UP -> {
+                    val dx = event.x - startX
+                    val dy = event.y - startY
+
+                    if (swipeHandled &&
+                        abs(dx) > dp(35) &&
+                        abs(dx) > abs(dy)
+                    ) {
+                        onSwipe(if (dx < 0) 1 else -1)
+                        performClick()
+                    }
+
+                    swipeHandled = false
+                    return true
+                }
+
+                MotionEvent.ACTION_CANCEL -> {
+                    swipeHandled = false
+                    return true
+                }
+            }
+
+            return true
         }
 
-        parent.addView(button, params)
+        override fun performClick(): Boolean {
+            super.performClick()
+            return true
+        }
     }
 
     private fun dp(value: Int): Int =
