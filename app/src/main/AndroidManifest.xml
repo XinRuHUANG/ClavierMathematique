@@ -21,6 +21,20 @@
             android:name=".FloatingMathService"
             android:exported="false" />
 
+        <service
+            android:name=".MathAccessibilityService"
+            android:label="Insertion de symboles mathématiques"
+            android:permission="android.permission.BIND_ACCESSIBILITY_SERVICE"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.accessibilityservice.AccessibilityService" />
+            </intent-filter>
+
+            <meta-data
+                android:name="android.accessibilityservice"
+                android:resource="@xml/math_accessibility_service" />
+        </service>
+
     </application>
 
 </manifest>
