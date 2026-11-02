@@ -1,8 +1,6 @@
 package com.example.claviermathematique
 
 import android.app.Service
-import android.content.ClipData
-import android.content.ClipboardManager
 import android.content.Context
 import android.content.Intent
 import android.content.SharedPreferences
@@ -12,9 +10,11 @@ import android.os.IBinder
 import android.view.Gravity
 import android.view.MotionEvent
 import android.view.View
+import android.view.ViewGroup
 import android.view.WindowManager
 import android.widget.Button
 import android.widget.LinearLayout
+import android.widget.ScrollView
 import android.widget.TextView
 import android.widget.Toast
 import kotlin.math.abs
@@ -41,31 +41,31 @@ private object MathPanelConfig {
     const val MAX_HEIGHT = 800
 
     // Barre de titre
-    const val TITLE_BAR_HEIGHT = 40
+    const val TITLE_BAR_HEIGHT = 36
     const val TITLE_TEXT_SIZE = 16f
     const val TITLE_BUTTON_WIDTH = 44
 
     // Colonne des catégories
     const val CATEGORY_WIDTH = 94
-    const val CATEGORY_BUTTON_HEIGHT = 36
+    const val CATEGORY_BUTTON_HEIGHT = 32
     const val CATEGORY_TEXT_SIZE = 10f
 
     // Grille des symboles
     const val SYMBOLS_PER_ROW = 7
     const val ROWS_PER_PAGE = 4
     const val SYMBOLS_PER_PAGE = SYMBOLS_PER_ROW * ROWS_PER_PAGE
-    const val SYMBOL_BUTTON_HEIGHT = 42
+    const val SYMBOL_BUTTON_HEIGHT = 38
     const val SYMBOL_TEXT_SIZE = 18f
     const val LONG_SYMBOL_TEXT_SIZE = 13f
     const val LONG_SYMBOL_LENGTH = 4
 
     // Espacements
-    const val PANEL_PADDING = 2
-    const val CONTENT_PADDING = 1
+    const val PANEL_PADDING = 1
+    const val CONTENT_PADDING = 0
     const val SYMBOL_MARGIN = 1
     const val CATEGORY_MARGIN = 1
-    const val PAGE_INDICATOR_HEIGHT = 18
-    const val RESIZE_HANDLE_HEIGHT = 14
+    const val PAGE_INDICATOR_HEIGHT = 12
+    const val RESIZE_HANDLE_HEIGHT = 10
 
     // Historique
     const val MAX_RECENT_SYMBOLS = 30
@@ -245,7 +245,7 @@ class FloatingMathService : Service() {
                 dp(MathPanelConfig.PANEL_PADDING),
                 dp(MathPanelConfig.PANEL_PADDING),
                 dp(MathPanelConfig.PANEL_PADDING),
-                dp(MathPanelConfig.PANEL_PADDING)
+                0
             )
             setBackgroundColor(Color.rgb(245, 245, 245))
         }
@@ -280,8 +280,23 @@ class FloatingMathService : Service() {
             onSwipe = { direction -> navigateHorizontally(direction) }
         }
 
+        // Défilement vertical des symboles lorsque le panneau est réduit.
+        val symbolsScroll = ScrollView(this).apply {
+            isFillViewport = false
+            isVerticalScrollBarEnabled = true
+            overScrollMode = View.OVER_SCROLL_IF_CONTENT_SCROLLS
+            clipToPadding = false
+            addView(
+                contentArea,
+                ViewGroup.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT,
+                    ViewGroup.LayoutParams.WRAP_CONTENT
+                )
+            )
+        }
+
         mainArea.addView(
-            contentArea,
+            symbolsScroll,
             LinearLayout.LayoutParams(
                 0,
                 LinearLayout.LayoutParams.MATCH_PARENT,
@@ -291,12 +306,27 @@ class FloatingMathService : Service() {
 
         categoryArea = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            setPadding(dp(2), 0, 0, 0)
+            setPadding(0, 0, 0, 0)
         }
         buildCategoryBar()
 
+        // La liste des catégories possède son propre défilement vertical.
+        val categoriesScroll = ScrollView(this).apply {
+            isFillViewport = false
+            isVerticalScrollBarEnabled = true
+            overScrollMode = View.OVER_SCROLL_IF_CONTENT_SCROLLS
+            clipToPadding = false
+            addView(
+                categoryArea,
+                ViewGroup.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT,
+                    ViewGroup.LayoutParams.WRAP_CONTENT
+                )
+            )
+        }
+
         mainArea.addView(
-            categoryArea,
+            categoriesScroll,
             LinearLayout.LayoutParams(
                 dp(MathPanelConfig.CATEGORY_WIDTH),
                 LinearLayout.LayoutParams.MATCH_PARENT
@@ -661,25 +691,15 @@ class FloatingMathService : Service() {
             ?.insertSymbol(symbol) ?: false
 
         if (!inserted) {
-            copyToClipboard(symbol)
             Toast.makeText(
                 this,
-                "Insertion directe indisponible : symbole copié",
-                Toast.LENGTH_SHORT
+                "Insertion impossible : active le service d'accessibilité et sélectionne un champ de texte.",
+                Toast.LENGTH_LONG
             ).show()
         }
 
         updatePageIndicator()
         saveState()
-    }
-
-    private fun copyToClipboard(symbol: String) {
-        val clipboard = getSystemService(Context.CLIPBOARD_SERVICE)
-            as ClipboardManager
-
-        clipboard.setPrimaryClip(
-            ClipData.newPlainText("Symbole mathématique", symbol)
-        )
     }
 
     // --------------------------------------------------
@@ -734,8 +754,8 @@ class FloatingMathService : Service() {
         val handle = TextView(this).apply {
             text = "◢"
             textSize = 11f
-            gravity = Gravity.BOTTOM or Gravity.END
-            setPadding(dp(4), 0, dp(4), 0)
+            gravity = Gravity.CENTER_VERTICAL or Gravity.END
+            setPadding(dp(2), 0, dp(2), 0)
             setTextColor(Color.DKGRAY)
         }
 
