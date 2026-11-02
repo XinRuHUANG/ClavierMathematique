@@ -10,14 +10,13 @@ import android.os.IBinder
 import android.view.Gravity
 import android.view.MotionEvent
 import android.view.View
-import android.view.ViewGroup
 import android.view.WindowManager
+import android.view.ViewGroup
 import android.widget.Button
 import android.widget.LinearLayout
 import android.widget.ScrollView
 import android.widget.TextView
 import android.widget.Toast
-import kotlin.math.abs
 import kotlin.math.max
 import kotlin.math.min
 
@@ -27,7 +26,6 @@ import kotlin.math.min
 // ======================================================
 
 private object MathPanelConfig {
-
     // Dimensions et position initiales
     const val PANEL_WIDTH = 700
     const val PANEL_HEIGHT = 420
@@ -52,8 +50,6 @@ private object MathPanelConfig {
 
     // Grille des symboles
     const val SYMBOLS_PER_ROW = 7
-    const val ROWS_PER_PAGE = 4
-    const val SYMBOLS_PER_PAGE = SYMBOLS_PER_ROW * ROWS_PER_PAGE
     const val SYMBOL_BUTTON_HEIGHT = 38
     const val SYMBOL_TEXT_SIZE = 18f
     const val LONG_SYMBOL_TEXT_SIZE = 13f
@@ -64,15 +60,15 @@ private object MathPanelConfig {
     const val CONTENT_PADDING = 0
     const val SYMBOL_MARGIN = 1
     const val CATEGORY_MARGIN = 1
-    const val PAGE_INDICATOR_HEIGHT = 12
     const val RESIZE_HANDLE_HEIGHT = 10
 
     // Historique
     const val MAX_RECENT_SYMBOLS = 30
 
-    // Détection du balayage horizontal
-    const val SWIPE_DISTANCE = 60
-    const val SWIPE_VELOCITY = 40
+    // Version de mise en page : force une hauteur initiale confortable
+    // lors de la première ouverture après cette mise à jour.
+    const val LAYOUT_VERSION = 2
+    const val MIN_MIGRATED_HEIGHT = 300
 }
 
 // ======================================================
@@ -84,16 +80,15 @@ class FloatingMathService : Service() {
     private lateinit var windowManager: WindowManager
     private lateinit var floatingView: LinearLayout
     private lateinit var mainArea: LinearLayout
-    private lateinit var contentArea: SwipeableLinearLayout
+    private lateinit var contentArea: LinearLayout
+    private lateinit var symbolsScroll: ScrollView
     private lateinit var categoryArea: LinearLayout
-    private lateinit var pageIndicator: TextView
     private lateinit var titleText: TextView
 
     private lateinit var params: WindowManager.LayoutParams
     private lateinit var preferences: SharedPreferences
 
     private var currentCategory = "Calcul"
-    private var currentPage = 0
     private var panelWidth = 0
     private var panelHeight = 0
     private var isMinimized = false
@@ -111,14 +106,12 @@ class FloatingMathService : Service() {
             "·", "∞", "∝", "≈", "≡",
             "∼", "∴", "∵", "∜"
         ),
-
         "Comparaison" to listOf(
             "<", ">", "≤", "≥", "≈",
             "≃", "≡", "∼", "≪", "≫",
             "≅", "≇", "≮", "≯", "≲",
             "≳", "≺", "≻", "≼", "≽"
         ),
-
         "Grec" to listOf(
             "α", "β", "γ", "δ", "ε",
             "ζ", "η", "θ", "ι", "κ",
@@ -128,27 +121,23 @@ class FloatingMathService : Service() {
             "Γ", "Δ", "Θ", "Λ", "Ξ",
             "Π", "Σ", "Ω"
         ),
-
         "Ensembles" to listOf(
             "∈", "∉", "∋", "⊂", "⊆",
             "⊃", "⊇", "∪", "∩", "∅",
             "∖", "ℕ", "ℤ", "ℚ", "ℝ",
             "ℂ", "𝔽", "⊕", "⊗", "∁"
         ),
-
         "Analyse" to listOf(
             "lim", "→", "∞", "∑", "∏",
             "∫", "∬", "∮", "∂", "∇",
             "′", "″", "Δ", "dx", "dy",
             "↦", "⟶", "∃", "∄"
         ),
-
         "Logique" to listOf(
             "∀", "∃", "∄", "¬", "∧",
             "∨", "⇒", "⇔", "⟹", "⟺",
             "⊤", "⊥", "⊢", "⊨", "∎"
         ),
-
         "Algèbre linéaire" to listOf(
             "→", "·", "×", "⊗", "⊕",
             "⟨", "⟩", "‖", "det", "tr",
@@ -156,7 +145,6 @@ class FloatingMathService : Service() {
             "Aᵀ", "A⁻¹", "Iₙ", "λ",
             "v⃗", "u⃗", "0⃗", "ℝⁿ"
         ),
-
         "Autres" to listOf(
             "P(A)", "P(A|B)", "E(X)", "Var",
             "Cov", "σ", "σ²", "sin",
@@ -171,10 +159,8 @@ class FloatingMathService : Service() {
 
     override fun onCreate() {
         super.onCreate()
-
         windowManager = getSystemService(WINDOW_SERVICE) as WindowManager
         preferences = getSharedPreferences("math_panel", Context.MODE_PRIVATE)
-
         loadState()
         createFloatingPanel()
     }
@@ -186,6 +172,8 @@ class FloatingMathService : Service() {
     // --------------------------------------------------
 
     private fun loadState() {
+        val previousLayoutVersion = preferences.getInt("layout_version", 0)
+
         panelWidth = preferences.getInt(
             "width",
             dp(MathPanelConfig.PANEL_WIDTH)
@@ -194,13 +182,36 @@ class FloatingMathService : Service() {
             dp(MathPanelConfig.MAX_WIDTH)
         )
 
-        panelHeight = preferences.getInt(
+        val savedHeight = preferences.getInt(
             "height",
             dp(MathPanelConfig.PANEL_HEIGHT)
-        ).coerceIn(
-            dp(MathPanelConfig.MIN_HEIGHT),
-            dp(MathPanelConfig.MAX_HEIGHT)
         )
+
+        // Les anciennes versions pouvaient mémoriser une hauteur minimale.
+        // À la première ouverture de cette nouvelle mise en page, on repart
+        // d'une hauteur confortable. Les redimensionnements suivants seront
+        // conservés normalement.
+        panelHeight = if (previousLayoutVersion < MathPanelConfig.LAYOUT_VERSION) {
+            dp(MathPanelConfig.PANEL_HEIGHT).coerceIn(
+                dp(MathPanelConfig.MIN_HEIGHT),
+                dp(MathPanelConfig.MAX_HEIGHT)
+            )
+        } else {
+            savedHeight.coerceIn(
+                dp(MathPanelConfig.MIN_HEIGHT),
+                dp(MathPanelConfig.MAX_HEIGHT)
+            ).let { height ->
+                if (height < dp(MathPanelConfig.MIN_MIGRATED_HEIGHT)) {
+                    dp(MathPanelConfig.PANEL_HEIGHT)
+                } else {
+                    height
+                }
+            }
+        }
+
+        preferences.edit()
+            .putInt("layout_version", MathPanelConfig.LAYOUT_VERSION)
+            .apply()
 
         val savedRecents = preferences.getString("recent_symbols", null)
         if (!savedRecents.isNullOrEmpty()) {
@@ -216,8 +227,6 @@ class FloatingMathService : Service() {
         currentCategory = if (
             savedCategory == "Récents" || categories.containsKey(savedCategory)
         ) savedCategory else "Calcul"
-
-        currentPage = preferences.getInt("page", 0).coerceAtLeast(0)
     }
 
     private fun saveState() {
@@ -228,8 +237,8 @@ class FloatingMathService : Service() {
             .putInt("y", params.y)
             .putInt("width", params.width)
             .putInt("height", if (isMinimized) panelHeight else params.height)
+            .putInt("layout_version", MathPanelConfig.LAYOUT_VERSION)
             .putString("category", currentCategory)
-            .putInt("page", currentPage)
             .putString("recent_symbols", recentSymbols.joinToString("\u001F"))
             .apply()
     }
@@ -268,7 +277,7 @@ class FloatingMathService : Service() {
             orientation = LinearLayout.HORIZONTAL
         }
 
-        contentArea = SwipeableLinearLayout(this).apply {
+        contentArea = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             setPadding(
                 dp(MathPanelConfig.CONTENT_PADDING),
@@ -277,11 +286,11 @@ class FloatingMathService : Service() {
                 dp(MathPanelConfig.CONTENT_PADDING)
             )
             gravity = Gravity.TOP
-            onSwipe = { direction -> navigateHorizontally(direction) }
         }
 
-        // Défilement vertical des symboles lorsque le panneau est réduit.
-        val symbolsScroll = ScrollView(this).apply {
+        // Tous les symboles sont construits dans une seule grille verticale.
+        // Le défilement vertical est assuré par ce ScrollView.
+        symbolsScroll = ScrollView(this).apply {
             isFillViewport = false
             isVerticalScrollBarEnabled = true
             overScrollMode = View.OVER_SCROLL_IF_CONTENT_SCROLLS
@@ -308,9 +317,9 @@ class FloatingMathService : Service() {
             orientation = LinearLayout.VERTICAL
             setPadding(0, 0, 0, 0)
         }
+
         buildCategoryBar()
 
-        // La liste des catégories possède son propre défilement vertical.
         val categoriesScroll = ScrollView(this).apply {
             isFillViewport = false
             isVerticalScrollBarEnabled = true
@@ -342,23 +351,6 @@ class FloatingMathService : Service() {
             )
         )
 
-        pageIndicator = TextView(this).apply {
-            textSize = 12f
-            gravity = Gravity.CENTER
-            setTextColor(Color.DKGRAY)
-            setPadding(0, 0, 0, 0)
-            setOnClickListener { goToNextPage() }
-            contentDescription = "Appuyer pour passer à la page suivante"
-        }
-
-        floatingView.addView(
-            pageIndicator,
-            LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.MATCH_PARENT,
-                dp(MathPanelConfig.PAGE_INDICATOR_HEIGHT)
-            )
-        )
-
         buildResizeHandle()
 
         windowManager.addView(floatingView, params)
@@ -380,8 +372,6 @@ class FloatingMathService : Service() {
             gravity = Gravity.CENTER_VERTICAL
         }
 
-        // Le déplacement est attaché au titre uniquement afin de ne pas
-        // bloquer les clics sur les boutons réduire et fermer.
         setupDrag(titleText)
 
         titleBar.addView(
@@ -456,9 +446,9 @@ class FloatingMathService : Service() {
 
                 setOnClickListener {
                     currentCategory = category
-                    currentPage = 0
                     renderSymbols()
                     updateCategoryAppearance()
+                    symbolsScroll.post { symbolsScroll.scrollTo(0, 0) }
                     saveState()
                 }
             }
@@ -503,7 +493,7 @@ class FloatingMathService : Service() {
     }
 
     // --------------------------------------------------
-    // Affichage des symboles et pagination
+    // Affichage de tous les symboles (sans pagination)
     // --------------------------------------------------
 
     private fun renderSymbols() {
@@ -512,167 +502,67 @@ class FloatingMathService : Service() {
         contentArea.removeAllViews()
 
         val symbols = symbolsForCurrentCategory()
-        val pageCount = max(
-            1,
-            (symbols.size + MathPanelConfig.SYMBOLS_PER_PAGE - 1) /
-                MathPanelConfig.SYMBOLS_PER_PAGE
-        )
 
-        currentPage = currentPage.coerceIn(0, pageCount - 1)
+        symbols.chunked(MathPanelConfig.SYMBOLS_PER_ROW).forEach { rowSymbols ->
+            val row = LinearLayout(this).apply {
+                orientation = LinearLayout.HORIZONTAL
+                gravity = Gravity.CENTER_VERTICAL
+            }
 
-        val visibleSymbols = symbols
-            .drop(currentPage * MathPanelConfig.SYMBOLS_PER_PAGE)
-            .take(MathPanelConfig.SYMBOLS_PER_PAGE)
-
-        visibleSymbols
-            .chunked(MathPanelConfig.SYMBOLS_PER_ROW)
-            .forEach { rowSymbols ->
-
-                val row = LinearLayout(this).apply {
-                    orientation = LinearLayout.HORIZONTAL
-                    gravity = Gravity.CENTER_VERTICAL
-                }
-
-                rowSymbols.forEach { symbol ->
-                    val button = Button(this).apply {
-                        text = symbol
-                        textSize = if (
-                            symbol.length > MathPanelConfig.LONG_SYMBOL_LENGTH
-                        ) {
-                            MathPanelConfig.LONG_SYMBOL_TEXT_SIZE
-                        } else {
-                            MathPanelConfig.SYMBOL_TEXT_SIZE
-                        }
-                        isAllCaps = false
-                        setPadding(dp(1), 0, dp(1), 0)
-                        minHeight = 0
-                        minimumHeight = 0
-                        setOnClickListener { insertOrCopySymbol(symbol) }
+            rowSymbols.forEach { symbol ->
+                val button = Button(this).apply {
+                    text = symbol
+                    textSize = if (
+                        symbol.length > MathPanelConfig.LONG_SYMBOL_LENGTH
+                    ) {
+                        MathPanelConfig.LONG_SYMBOL_TEXT_SIZE
+                    } else {
+                        MathPanelConfig.SYMBOL_TEXT_SIZE
                     }
-
-                    row.addView(
-                        button,
-                        LinearLayout.LayoutParams(
-                            0,
-                            dp(MathPanelConfig.SYMBOL_BUTTON_HEIGHT),
-                            1f
-                        ).apply {
-                            setMargins(
-                                dp(MathPanelConfig.SYMBOL_MARGIN),
-                                dp(MathPanelConfig.SYMBOL_MARGIN),
-                                dp(MathPanelConfig.SYMBOL_MARGIN),
-                                dp(MathPanelConfig.SYMBOL_MARGIN)
-                            )
-                        }
-                    )
+                    isAllCaps = false
+                    setPadding(dp(1), 0, dp(1), 0)
+                    minHeight = 0
+                    minimumHeight = 0
+                    setOnClickListener { insertOrCopySymbol(symbol) }
                 }
 
-                repeat(
-                    MathPanelConfig.SYMBOLS_PER_ROW - rowSymbols.size
-                ) {
-                    row.addView(
-                        View(this),
-                        LinearLayout.LayoutParams(0, 1, 1f)
-                    )
-                }
-
-                contentArea.addView(
-                    row,
+                row.addView(
+                    button,
                     LinearLayout.LayoutParams(
-                        LinearLayout.LayoutParams.MATCH_PARENT,
-                        dp(MathPanelConfig.SYMBOL_BUTTON_HEIGHT + 2 * MathPanelConfig.SYMBOL_MARGIN)
+                        0,
+                        dp(MathPanelConfig.SYMBOL_BUTTON_HEIGHT),
+                        1f
+                    ).apply {
+                        setMargins(
+                            dp(MathPanelConfig.SYMBOL_MARGIN),
+                            dp(MathPanelConfig.SYMBOL_MARGIN),
+                            dp(MathPanelConfig.SYMBOL_MARGIN),
+                            dp(MathPanelConfig.SYMBOL_MARGIN)
+                        )
+                    }
+                )
+            }
+
+            repeat(MathPanelConfig.SYMBOLS_PER_ROW - rowSymbols.size) {
+                row.addView(
+                    View(this),
+                    LinearLayout.LayoutParams(0, 1, 1f)
+                )
+            }
+
+            contentArea.addView(
+                row,
+                LinearLayout.LayoutParams(
+                    LinearLayout.LayoutParams.MATCH_PARENT,
+                    dp(
+                        MathPanelConfig.SYMBOL_BUTTON_HEIGHT +
+                            2 * MathPanelConfig.SYMBOL_MARGIN
                     )
                 )
-            }
+            )
+        }
 
-        updatePageIndicator(pageCount)
         updateCategoryAppearance()
-    }
-
-    private fun updatePageIndicator(pageCount: Int? = null) {
-        if (!::pageIndicator.isInitialized) return
-
-        val symbols = symbolsForCurrentCategory()
-        val actualPageCount = pageCount ?: max(
-            1,
-            (symbols.size + MathPanelConfig.SYMBOLS_PER_PAGE - 1) /
-                MathPanelConfig.SYMBOLS_PER_PAGE
-        )
-
-        pageIndicator.text = when {
-            currentCategory == "Récents" && recentSymbols.isEmpty() ->
-                "Aucun symbole récent"
-
-            actualPageCount <= 1 ->
-                "1 / 1"
-
-            else ->
-                (1..actualPageCount).joinToString("  ") { page ->
-                    if (page - 1 == currentPage) "●" else "○"
-                }
-        }
-    }
-
-    private fun goToNextPage() {
-        val pageCount = max(
-            1,
-            (symbolsForCurrentCategory().size +
-                MathPanelConfig.SYMBOLS_PER_PAGE - 1) /
-                MathPanelConfig.SYMBOLS_PER_PAGE
-        )
-
-        if (pageCount > 1) {
-            currentPage = (currentPage + 1) % pageCount
-            renderSymbols()
-            saveState()
-        }
-    }
-
-    /**
-     * Balayage horizontal :
-     * - change de page dans la catégorie courante ;
-     * - si l'on est déjà sur la première/dernière page, passe à la catégorie
-     *   précédente/suivante.
-     */
-    private fun navigateHorizontally(direction: Int) {
-        val names = categoryNames
-        val pageCount = max(
-            1,
-            (symbolsForCurrentCategory().size +
-                MathPanelConfig.SYMBOLS_PER_PAGE - 1) /
-                MathPanelConfig.SYMBOLS_PER_PAGE
-        )
-
-        if (direction > 0) {
-            if (currentPage < pageCount - 1) {
-                currentPage++
-            } else {
-                val categoryIndex = names.indexOf(currentCategory)
-                currentCategory = names[
-                    (categoryIndex + 1).coerceAtMost(names.lastIndex)
-                ]
-                currentPage = 0
-            }
-        } else {
-            if (currentPage > 0) {
-                currentPage--
-            } else {
-                val categoryIndex = names.indexOf(currentCategory)
-                currentCategory = names[
-                    (categoryIndex - 1).coerceAtLeast(0)
-                ]
-                val newPageCount = max(
-                    1,
-                    (symbolsForCurrentCategory().size +
-                        MathPanelConfig.SYMBOLS_PER_PAGE - 1) /
-                        MathPanelConfig.SYMBOLS_PER_PAGE
-                )
-                currentPage = newPageCount - 1
-            }
-        }
-
-        renderSymbols()
-        saveState()
     }
 
     // --------------------------------------------------
@@ -698,7 +588,6 @@ class FloatingMathService : Service() {
             ).show()
         }
 
-        updatePageIndicator()
         saveState()
     }
 
@@ -729,7 +618,6 @@ class FloatingMathService : Service() {
                                 (event.rawX - initialTouchX).toInt()
                             params.y = initialY +
                                 (event.rawY - initialTouchY).toInt()
-
                             windowManager.updateViewLayout(floatingView, params)
                             return true
                         }
@@ -802,9 +690,9 @@ class FloatingMathService : Service() {
                                 max(newHeight, dp(MathPanelConfig.MIN_HEIGHT)),
                                 dp(MathPanelConfig.MAX_HEIGHT)
                             )
+
                             panelWidth = params.width
                             panelHeight = params.height
-
                             windowManager.updateViewLayout(floatingView, params)
                             return true
                         }
@@ -829,9 +717,7 @@ class FloatingMathService : Service() {
         isMinimized = !isMinimized
 
         mainArea.visibility = if (isMinimized) View.GONE else View.VISIBLE
-        pageIndicator.visibility = if (isMinimized) View.GONE else View.VISIBLE
 
-        // Le bouton de réduction reste accessible dans la barre de titre.
         params.height = if (isMinimized) {
             dp(MathPanelConfig.TITLE_BAR_HEIGHT +
                 MathPanelConfig.PANEL_PADDING * 2)
@@ -861,68 +747,4 @@ class FloatingMathService : Service() {
 
     private fun dp(value: Int): Int =
         (value * resources.displayMetrics.density).toInt()
-
-    /**
-     * Layout qui intercepte uniquement les gestes horizontaux suffisamment
-     * longs. Les clics normaux sur les boutons restent fonctionnels.
-     */
-    private inner class SwipeableLinearLayout(context: Context) :
-        LinearLayout(context) {
-
-        var onSwipe: ((Int) -> Unit)? = null
-
-        private var downX = 0f
-        private var downY = 0f
-        private var swipeHandled = false
-
-        override fun onInterceptTouchEvent(event: MotionEvent): Boolean {
-            when (event.action) {
-                MotionEvent.ACTION_DOWN -> {
-                    downX = event.x
-                    downY = event.y
-                    swipeHandled = false
-                }
-
-                MotionEvent.ACTION_MOVE -> {
-                    val deltaX = event.x - downX
-                    val deltaY = event.y - downY
-
-                    if (
-                        abs(deltaX) > dp(MathPanelConfig.SWIPE_DISTANCE) &&
-                        abs(deltaX) > abs(deltaY) * 1.2f
-                    ) {
-                        swipeHandled = true
-                        return true
-                    }
-                }
-            }
-            return super.onInterceptTouchEvent(event)
-        }
-
-        override fun onTouchEvent(event: MotionEvent): Boolean {
-            when (event.action) {
-                MotionEvent.ACTION_UP -> {
-                    if (swipeHandled) {
-                        val deltaX = event.x - downX
-                        if (abs(deltaX) > dp(MathPanelConfig.SWIPE_VELOCITY)) {
-                            onSwipe?.invoke(if (deltaX < 0) 1 else -1)
-                        }
-                        performClick()
-                        swipeHandled = false
-                        return true
-                    }
-                }
-
-                MotionEvent.ACTION_CANCEL -> {
-                    swipeHandled = false
-                }
-            }
-            return true
-        }
-
-        override fun performClick(): Boolean {
-            super.performClick()
-            return true
-        }
-    }
 }
