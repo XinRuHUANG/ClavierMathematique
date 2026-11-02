@@ -1,5 +1,8 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
 
+    <!-- Autorisation nécessaire pour afficher le panneau flottant -->
+    <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
+
     <application
         android:allowBackup="false"
         android:label="Clavier Mathématique"
@@ -15,18 +18,9 @@
         </activity>
 
         <service
-            android:name=".MathKeyboardService"
-            android:label="Clavier Mathématique"
-            android:permission="android.permission.BIND_INPUT_METHOD"
-            android:exported="true">
-            <intent-filter>
-                <action android:name="android.view.InputMethod" />
-            </intent-filter>
-
-            <meta-data
-                android:name="android.view.im"
-                android:resource="@xml/method" />
-        </service>
+            android:name=".FloatingMathService"
+            android:exported="false" />
 
     </application>
+
 </manifest>

@@ -2,10 +2,9 @@ package com.example.claviermathematique
 
 import android.app.Activity
 import android.content.Intent
+import android.net.Uri
 import android.os.Bundle
 import android.provider.Settings
-import android.view.inputmethod.InputMethodManager
-import android.content.Context
 import android.widget.Button
 import android.widget.LinearLayout
 import android.widget.TextView
@@ -17,19 +16,20 @@ class MainActivity : Activity() {
 
         val layout = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            setPadding(32, 48, 32, 32)
+            setPadding(dp(24), dp(40), dp(24), dp(24))
         }
 
         val title = TextView(this).apply {
-            text = "Clavier Mathématique"
+            text = "Panneau Mathématique"
             textSize = 26f
         }
 
         val description = TextView(this).apply {
             text = """
-                Ton clavier de symboles mathématiques.
+                Utilise ton clavier Android habituel.
 
-                8 catégories :
+                Le panneau flottant permet d'accéder rapidement aux symboles :
+
                 • Calcul
                 • Comparaison
                 • Grec
@@ -39,33 +39,58 @@ class MainActivity : Activity() {
                 • Algèbre linéaire
                 • Autres
 
-                Active le clavier ci-dessous pour commencer.
+                Tu peux déplacer et redimensionner le panneau.
+
+                Appuie sur un symbole pour le copier.
             """.trimIndent()
-            textSize = 17f
-            setPadding(0, 24, 0, 24)
+
+            textSize = 16f
+            setPadding(0, dp(24), 0, dp(24))
         }
 
-        val settingsButton = Button(this).apply {
-            text = "1. Activer le clavier"
+        val permissionButton = Button(this).apply {
+            text = "1. Autoriser le panneau flottant"
+
             setOnClickListener {
-                startActivity(Intent(Settings.ACTION_INPUT_METHOD_SETTINGS))
+                if (!Settings.canDrawOverlays(this@MainActivity)) {
+                    val intent = Intent(
+                        Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
+                        Uri.parse("package:$packageName")
+                    )
+                    startActivity(intent)
+                }
             }
         }
 
-        val pickerButton = Button(this).apply {
-            text = "2. Choisir le clavier"
+        val startButton = Button(this).apply {
+            text = "2. Ouvrir le panneau mathématique"
+
             setOnClickListener {
-                val manager =
-                    getSystemService(Context.INPUT_METHOD_SERVICE) as InputMethodManager
-                manager.showInputMethodPicker()
+                if (Settings.canDrawOverlays(this@MainActivity)) {
+                    startService(
+                        Intent(
+                            this@MainActivity,
+                            FloatingMathService::class.java
+                        )
+                    )
+                } else {
+                    val intent = Intent(
+                        Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
+                        Uri.parse("package:$packageName")
+                    )
+                    startActivity(intent)
+                }
             }
         }
 
         layout.addView(title)
         layout.addView(description)
-        layout.addView(settingsButton)
-        layout.addView(pickerButton)
+        layout.addView(permissionButton)
+        layout.addView(startButton)
 
         setContentView(layout)
     }
+
+    private fun dp(value: Int): Int =
+        (value * resources.displayMetrics.density).toInt()
 }
